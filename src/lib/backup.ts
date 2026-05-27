@@ -437,24 +437,49 @@ export async function restoreBackup(
       }
       return true;
     });
+    // Allow-list of roles a non-system restore can introduce. NEVER includes
+    // "admin" — that role is reserved for the platform owner and must not be
+    // creatable via a backup upload.
+    const SAFE_TENANT_ROLES = new Set(["store", "owner", "employee", "customer"]);
+
     for (const u of scopedUsers) {
-      // For non-system restores, never let restore mutate role/clientId
-      // (privilege escalation surface). Admin-scope restores can set anything.
-      const setClause: Record<string, unknown> =
-        trustedScope.kind === "system"
-          ? {
-              email: u.email, firstName: u.firstName, lastName: u.lastName,
-              role: u.role, isPrimary: u.isPrimary, passwordHash: u.passwordHash,
-              disabledAt: u.disabledAt, updatedAt: new Date(),
-            }
-          : {
-              email: u.email, firstName: u.firstName, lastName: u.lastName,
-              passwordHash: u.passwordHash, disabledAt: u.disabledAt,
-              updatedAt: new Date(),
-            };
+      const isSystem = trustedScope.kind === "system";
+
+      // Validate role on input. For non-system restores, reject rows that
+      // claim privileged roles or wrong client.
+      if (!isSystem) {
+        if (!SAFE_TENANT_ROLES.has(u.role)) continue; // refuse "admin" sneak-ins
+        if (u.clientId !== c.id) continue;
+      }
+
+      // Sanitize INSERT payload — never trust uploaded role/clientId for
+      // non-system scope. clientId is pinned to the trusted scope's client.
+      const insertRow = isSystem
+        ? u
+        : {
+            ...u,
+            clientId: c.id,
+            role: u.role, // already validated above
+            isPrimary: Boolean(u.isPrimary),
+          };
+
+      // Sanitize UPDATE set similarly: non-system restores cannot rewrite
+      // a target user's role, clientId, or isPrimary.
+      const setClause: Record<string, unknown> = isSystem
+        ? {
+            email: u.email, firstName: u.firstName, lastName: u.lastName,
+            role: u.role, isPrimary: u.isPrimary, passwordHash: u.passwordHash,
+            disabledAt: u.disabledAt, updatedAt: new Date(),
+          }
+        : {
+            email: u.email, firstName: u.firstName, lastName: u.lastName,
+            passwordHash: u.passwordHash, disabledAt: u.disabledAt,
+            updatedAt: new Date(),
+          };
+
       await db
         .insert(users)
-        .values(u)
+        .values(insertRow)
         .onConflictDoUpdate({ target: users.id, set: setClause });
       usersTouched++;
     }
