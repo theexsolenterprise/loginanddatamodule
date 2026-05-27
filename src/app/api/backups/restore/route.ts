@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "../../../../../auth";
 import { restoreBackup, scopeFromKey, type RestoreMode } from "@/lib/backup";
 import { canBackupScope } from "@/lib/backup-rbac";
+import { logAudit } from "@/lib/audit";
 
 /**
  * Final restore endpoint — only reachable after the user picked merge or
@@ -42,6 +43,18 @@ export async function POST(req: NextRequest) {
   if (!allowed) return new Response("Forbidden", { status: 403 });
 
   const result = await restoreBackup(key, mode);
+  await logAudit({
+    actorUserId: session.user.id,
+    clientId: scope.kind !== "system" ? scope.clientId : null,
+    action: "backup.restore",
+    target: key,
+    metadata: {
+      scope, mode,
+      clientsTouched: result.clientsTouched,
+      usersTouched: result.usersTouched,
+      nodesTouched: result.nodesTouched,
+    },
+  });
   const root = session.user.role === "admin" ? "/admin" : "/app";
   const url = new URL(`${root}/settings`, req.url);
   url.searchParams.set("restored", "ok");

@@ -44,12 +44,10 @@ export async function TeamSection() {
     const firstName = String(formData.get("firstName") ?? "").trim();
     const lastName = String(formData.get("lastName") ?? "").trim();
     const email = String(formData.get("email") ?? "").trim().toLowerCase();
-    const isPrimary = formData.get("isPrimary") === "on";
     await db.update(users).set({
       firstName: firstName || target.firstName,
       lastName: lastName || target.lastName,
       email: email || target.email,
-      isPrimary,
       updatedAt: new Date(),
     }).where(eq(users.id, targetId));
     revalidatePath("/admin/settings");
@@ -134,6 +132,19 @@ export async function TeamSection() {
     revalidatePath("/app/settings");
   }
 
+  async function togglePrimary(formData: FormData) {
+    "use server";
+    const targetId = String(formData.get("id"));
+    const [target] = await db.select().from(users).where(eq(users.id, targetId)).limit(1);
+    if (!target) return;
+    if (!canManage(actor, asActor(target))) throw new Error("Forbidden");
+    await db.update(users).set({
+      isPrimary: !target.isPrimary, updatedAt: new Date(),
+    }).where(eq(users.id, targetId));
+    revalidatePath("/admin/settings");
+    revalidatePath("/app/settings");
+  }
+
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-5">
       <header className="flex items-center justify-between">
@@ -157,7 +168,7 @@ export async function TeamSection() {
           <input name="password" type="password" placeholder="Temp password" required className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm" />
           <label className="flex items-center gap-1.5 text-xs text-zinc-600 sm:col-span-5">
             <input type="checkbox" name="isPrimary" defaultChecked />
-            Primary tier (only matters for employees)
+            Primary tier (uncheck for secondary / limited access)
           </label>
           <button type="submit" className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-800">Invite</button>
         </form>
@@ -179,12 +190,6 @@ export async function TeamSection() {
                 <input name="email" defaultValue={u.email} className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm sm:col-span-3" />
                 <span className="text-xs text-zinc-500 sm:col-span-2">
                   {u.role}
-                  {u.role === "employee" && (
-                    <label className="ml-2 inline-flex items-center gap-1">
-                      <input type="checkbox" name="isPrimary" defaultChecked={u.isPrimary} />
-                      primary
-                    </label>
-                  )}
                 </span>
                 <span className="text-xs text-zinc-500 sm:col-span-2">
                   {u.disabledAt ? <span className="text-amber-600">disabled</span> : <span className="text-emerald-600">active</span>}
@@ -201,6 +206,21 @@ export async function TeamSection() {
                 </button>
               </form>
               <div className="flex flex-wrap items-center justify-end gap-2 sm:col-span-5 sm:justify-self-end">
+                <form action={togglePrimary}>
+                  <input type="hidden" name="id" value={u.id} />
+                  <button
+                    type="submit"
+                    title="Toggle primary / secondary tier"
+                    className={
+                      "rounded-md border px-2 py-1 text-xs font-medium " +
+                      (u.isPrimary
+                        ? "border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                        : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50")
+                    }
+                  >
+                    {u.isPrimary ? "primary" : "secondary"}
+                  </button>
+                </form>
                 <form action={setDisabled}>
                   <input type="hidden" name="id" value={u.id} />
                   <input type="hidden" name="disable" value={u.disabledAt ? "false" : "true"} />

@@ -103,8 +103,15 @@ export async function Shell({ children }: { children: React.ReactNode }) {
         <header className="flex h-14 items-center justify-between border-b border-zinc-200 bg-white px-6">
           <div className="text-sm text-zinc-500">
             {user.role[0].toUpperCase() + user.role.slice(1)}
-            {user.role === "employee" && (
-              <span className="ml-2 rounded bg-zinc-100 px-1.5 py-0.5 text-xs">
+            {user.role !== "admin" && (
+              <span
+                className={
+                  "ml-2 rounded px-1.5 py-0.5 text-xs " +
+                  (user.isPrimary
+                    ? "bg-indigo-50 text-indigo-700"
+                    : "bg-zinc-100 text-zinc-600")
+                }
+              >
                 {user.isPrimary ? "primary" : "secondary"}
               </span>
             )}

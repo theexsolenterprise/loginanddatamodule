@@ -5,14 +5,16 @@ import { clients } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import {
-  TierSchema,
-  ClientLabelsSchema,
+  GraphNodeSchema,
+  GraphEdgeSchema,
   ClientStructureSchema,
   defaultLabels,
+  tiersFromGraph,
   type ClientLabels,
   type ClientStructure,
+  type Tier,
 } from "@/types/client-structure";
-import { DynamicTierEditorHydrated } from "@/components/DynamicTierEditorHydrated";
+import { OrgGraphCanvas } from "@/components/OrgGraphCanvas";
 import { ensurePrefix, getClientStore, storeNameForClient } from "@/lib/blobs";
 import { defaultFolderPlan } from "@/lib/structure";
 import { requireAdmin } from "../../../../../../auth";
@@ -31,31 +33,25 @@ export default async function EditClientPage(props: { params: Promise<{ id: stri
     const name = String(formData.get("name") ?? c.name).trim();
     const kind = String(formData.get("kind") ?? c.kind);
 
-    const nextLabels = ClientLabelsSchema.parse({
-      store: String(formData.get("label_store") || labels.store),
-      owner: String(formData.get("label_owner") || labels.owner),
-      employee: String(formData.get("label_employee") || labels.employee),
-      customer: String(formData.get("label_customer") || labels.customer),
-      employeePrimary: String(formData.get("label_employeePrimary") || labels.employeePrimary),
-      employeeSecondary: String(formData.get("label_employeeSecondary") || labels.employeeSecondary),
-    });
+    // Preserve any stored labels; the editor no longer surfaces this form.
+    const nextLabels = labels;
 
-    const tiersRaw = String(formData.get("tiers_json") ?? "[]");
-    let tiers;
+    const graphRaw = String(formData.get("graph_json") ?? "{}");
+    let graph;
     try {
-      tiers = z.array(TierSchema).parse(JSON.parse(tiersRaw));
+      graph = z.object({
+        nodes: z.array(GraphNodeSchema),
+        edges: z.array(GraphEdgeSchema),
+      }).parse(JSON.parse(graphRaw));
     } catch {
-      throw new Error("Invalid tiers configuration.");
+      throw new Error("Invalid graph configuration.");
     }
-    if (tiers.length === 0) throw new Error("Define at least one tier.");
+    if (graph.nodes.length === 0) throw new Error("Add at least one box to the chart.");
 
-    const keys = new Set<string>();
-    for (const t of tiers) {
-      if (keys.has(t.key)) throw new Error(`Duplicate tier key: ${t.key}`);
-      keys.add(t.key);
-    }
+    const tiers: Tier[] = tiersFromGraph(graph);
 
     const nextStructure = ClientStructureSchema.parse({
+      graph,
       tiers,
       linkPolicy: String(formData.get("linkPolicy") ?? structure.linkPolicy ?? "flexible") as "strict" | "flexible",
       employeeTiers: formData.get("employeeTiers") === "on",
@@ -109,26 +105,11 @@ export default async function EditClientPage(props: { params: Promise<{ id: stri
         </section>
 
         <section>
-          <h2 className="text-sm font-semibold text-zinc-900">Tier labels</h2>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            {(["store", "owner", "employee", "customer", "employeePrimary", "employeeSecondary"] as const).map((k) => (
-              <label className="block" key={k}>
-                <span className="text-xs font-medium text-zinc-700">{labelTitle(k)}</span>
-                <input
-                  name={`label_${k}`}
-                  defaultValue={labels[k]}
-                  className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
-                />
-              </label>
-            ))}
-          </div>
-        </section>
-
-        <section>
-          <h2 className="text-sm font-semibold text-zinc-900">Tiers</h2>
-          <div className="mt-3">
-            <DynamicTierEditorHydrated initial={structure.tiers ?? []} />
-          </div>
+          <h2 className="text-sm font-semibold text-zinc-900">Company structure</h2>
+          <p className="-mt-1 mb-3 text-xs text-zinc-500">
+            Drag boxes anywhere on the canvas. Draw connections between any two boxes — many-to-one is supported.
+          </p>
+          <OrgGraphCanvas initial={structure.graph ?? { nodes: [], edges: [] }} />
         </section>
 
         <section>
@@ -161,14 +142,3 @@ export default async function EditClientPage(props: { params: Promise<{ id: stri
   );
 }
 
-function labelTitle(k: string) {
-  switch (k) {
-    case "store": return "Store";
-    case "owner": return "Owner";
-    case "employee": return "Employee";
-    case "customer": return "Customer";
-    case "employeePrimary": return "Primary employee";
-    case "employeeSecondary": return "Secondary employee";
-    default: return k;
-  }
-}

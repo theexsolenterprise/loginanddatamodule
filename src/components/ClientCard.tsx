@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import { revalidatePath } from "next/cache";
 import type { ClientStructure } from "@/types/client-structure";
 import { DataBackupCard } from "@/components/DataBackupCard";
+import { TierChartView } from "@/components/TierChartView";
 import { requireAdmin } from "../../auth";
 
 interface ClientCardProps {
@@ -62,23 +63,38 @@ export async function ClientCard({ client, mode }: ClientCardProps) {
         </div>
       </header>
 
-      {/* Tier strip — visual reminder of the client's structure */}
-      <div className="mt-3 flex flex-wrap gap-2">
-        {(structure.tiers ?? []).map((t) => (
-          <span
-            key={t.key}
-            className={
-              "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs " +
-              (t.bucketing === "combined"
-                ? "bg-amber-50 text-amber-700"
-                : "bg-zinc-100 text-zinc-700")
-            }
-            title={`acts as ${t.roleAs} · ${t.bucketing}${t.bucketing === "combined" ? `, ${t.subBuckets ?? "∞"} sub` : ""}`}
-          >
-            <span className="font-medium">{t.label}</span>
-            <span className="text-[10px] text-zinc-500">/{t.key}</span>
-          </span>
-        ))}
+      {/* Structure — chip strip + expandable mini-flowchart */}
+      <div className="mt-3">
+        <div className="flex flex-wrap gap-2">
+          {(structure.tiers ?? []).map((t) => (
+            <span
+              key={t.key}
+              className={
+                "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs " +
+                (t.bucketing === "combined"
+                  ? "bg-amber-50 text-amber-700"
+                  : "bg-zinc-100 text-zinc-700")
+              }
+              title={`acts as ${t.roleAs} · ${t.bucketing}${t.bucketing === "combined" ? `, ${t.subBuckets ?? "∞"} sub` : ""}`}
+            >
+              <span className="font-medium">{t.label}</span>
+              <span className="text-[10px] text-zinc-500">/{t.key}</span>
+            </span>
+          ))}
+        </div>
+
+        <details className="group mt-2 rounded-md border border-zinc-200 bg-zinc-50">
+          <summary className="cursor-pointer select-none px-3 py-2 text-xs text-zinc-600 hover:text-zinc-900">
+            View company chart →
+          </summary>
+          <div className="border-t border-zinc-200 bg-white p-4">
+            <TierChartView
+              graph={structure.graph ?? undefined}
+              boxes={structure.boxes ?? undefined}
+              tiers={structure.tiers ?? []}
+            />
+          </div>
+        </details>
       </div>
 
       {/* Body */}
@@ -192,6 +208,16 @@ async function LoginPanel({
     revalidatePath("/admin/settings/login");
   }
 
+  async function togglePrimary(formData: FormData) {
+    "use server";
+    const id = String(formData.get("id"));
+    const target = await assertAdminAndSameClient(id);
+    await db.update(users).set({
+      isPrimary: !target.isPrimary, updatedAt: new Date(),
+    }).where(eq(users.id, id));
+    revalidatePath("/admin/settings/login");
+  }
+
   return (
     <div className="mt-4 space-y-4">
       {/* Invite row */}
@@ -207,7 +233,8 @@ async function LoginPanel({
         </select>
         <input name="password" type="password" placeholder="Temp password" required className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm" />
         <label className="flex items-center gap-1.5 text-xs text-zinc-600 sm:col-span-5">
-          <input type="checkbox" name="isPrimary" defaultChecked /> Primary tier
+          <input type="checkbox" name="isPrimary" defaultChecked />
+          Primary tier (uncheck for secondary / limited access)
         </label>
         <button type="submit" className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-800">
           + Invite user
@@ -253,7 +280,21 @@ async function LoginPanel({
               </form>
 
               {/* Actions */}
-              <div className="flex items-center justify-end gap-1 sm:col-span-2">
+              <div className="flex flex-wrap items-center justify-end gap-1 sm:col-span-2">
+                <form action={togglePrimary}>
+                  <input type="hidden" name="id" value={u.id} />
+                  <button
+                    className={
+                      "rounded-md border px-2 py-1 text-[10px] font-medium " +
+                      (u.isPrimary
+                        ? "border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                        : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50")
+                    }
+                    title="Click to toggle primary / secondary tier"
+                  >
+                    {u.isPrimary ? "primary" : "secondary"}
+                  </button>
+                </form>
                 {googleSet.has(u.id) ? (
                   <form action={unlinkGoogle}>
                     <input type="hidden" name="id" value={u.id} />

@@ -2,17 +2,17 @@ import { redirect } from "next/navigation";
 import { db } from "@/db/client";
 import { clients } from "@/db/schema";
 import {
-  ClientLabelsSchema,
   ClientStructureSchema,
   defaultLabels,
   defaultStructure,
 } from "@/types/client-structure";
 import { provisionClientStore } from "@/lib/structure";
 import { storeNameForClient } from "@/lib/blobs";
-import { DynamicTierEditor } from "@/components/DynamicTierEditor";
-import { TierSchema } from "@/types/client-structure";
+import { OrgGraphCanvas } from "@/components/OrgGraphCanvas";
+import { GraphNodeSchema, GraphEdgeSchema, tiersFromGraph } from "@/types/client-structure";
 import { z } from "zod";
 import { requireAdmin } from "../../../../../auth";
+import { logAudit } from "@/lib/audit";
 
 // Free-text suggestions for the Kind field. The user can type anything.
 const KIND_SUGGESTIONS = [
@@ -30,44 +30,37 @@ const KIND_SUGGESTIONS = [
 export default function NewClientPage() {
   async function create(formData: FormData) {
     "use server";
-    await requireAdmin();
+    const session = await requireAdmin();
     const name = String(formData.get("name") ?? "").trim();
     const slugVal = slug(String(formData.get("slug") ?? name));
     const kind = String(formData.get("kind") ?? "custom");
 
-    // Labels
-    const labels = ClientLabelsSchema.parse({
-      store: String(formData.get("label_store") || defaultLabels().store),
-      owner: String(formData.get("label_owner") || defaultLabels().owner),
-      employee: String(formData.get("label_employee") || defaultLabels().employee),
-      customer: String(formData.get("label_customer") || defaultLabels().customer),
-      employeePrimary: String(formData.get("label_employeePrimary") || defaultLabels().employeePrimary),
-      employeeSecondary: String(formData.get("label_employeeSecondary") || defaultLabels().employeeSecondary),
-    });
+    // Labels — defaults retained for compatibility; box labels are the source of truth.
+    const labels = defaultLabels();
 
-    // Tiers come from the DynamicTierEditor client component as a JSON blob.
-    const tiersRaw = String(formData.get("tiers_json") ?? "[]");
-    let tiers;
+    // Graph (nodes + edges) comes from the OrgGraphCanvas client component.
+    const graphRaw = String(formData.get("graph_json") ?? "{}");
+    let graph;
     try {
-      tiers = z.array(TierSchema).parse(JSON.parse(tiersRaw));
+      graph = z.object({
+        nodes: z.array(GraphNodeSchema),
+        edges: z.array(GraphEdgeSchema),
+      }).parse(JSON.parse(graphRaw));
     } catch {
-      throw new Error("Invalid tiers configuration.");
+      throw new Error("Invalid graph configuration.");
     }
-    if (tiers.length === 0) throw new Error("Define at least one tier.");
+    if (graph.nodes.length === 0) throw new Error("Add at least one box to the chart.");
 
-    // Enforce unique keys.
-    const keys = new Set<string>();
-    for (const t of tiers) {
-      if (keys.has(t.key)) throw new Error(`Duplicate tier key: ${t.key}`);
-      keys.add(t.key);
-    }
+    // Derive legacy `tiers[]` from the graph for backward compat with the
+    // folder provisioner.
+    const tiers = tiersFromGraph(graph);
 
     const structure = ClientStructureSchema.parse({
+      graph,
       tiers,
       linkPolicy: String(formData.get("linkPolicy") ?? "flexible") as "strict" | "flexible",
       employeeTiers: formData.get("employeeTiers") === "on",
     });
-    // Backwards-compat: derive legacy `roles[]` from tiers.
     structure.roles = Array.from(new Set(tiers.map((t) => t.roleAs)));
 
     // Insert client, then provision Blobs store, then update the row with the
@@ -91,16 +84,23 @@ export default function NewClientPage() {
       .set({ blobsStore: storeName })
       .where(_clientIdEq(row.id));
 
+    await logAudit({
+      actorUserId: session.user.id,
+      clientId: row.id,
+      action: "client.create",
+      target: row.slug,
+      metadata: { kind, tiers: tiers.map((t) => t.key) },
+    });
+
     redirect(`/admin/clients/${row.id}`);
   }
 
-  const d = defaultLabels();
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-semibold text-zinc-900">Onboard a client</h1>
       <p className="text-sm text-zinc-500">
-        Configure the tenant's identity, the names you want each tier to display, and the
-        upper limits on how many of each they can have (leave a row Unlimited if there's no cap).
+        Give the tenant an identity and build their company chart. Each box is a position;
+        click <span className="font-mono">+ child</span> for a level below or <span className="font-mono">+ sibling</span> for a parallel branch.
       </p>
 
       <form action={create} className="space-y-8 rounded-xl border border-zinc-200 bg-white p-6">
@@ -126,25 +126,13 @@ export default function NewClientPage() {
           </label>
         </Section>
 
-        {/* ── Tier labels ── */}
-        <Section title="What do you call each tier?">
-          <Row>
-            <Field name="label_store" label="Store" placeholder={d.store} />
-            <Field name="label_owner" label="Owner" placeholder={d.owner} />
-          </Row>
-          <Row>
-            <Field name="label_employee" label="Employee" placeholder={d.employee} />
-            <Field name="label_customer" label="Customer" placeholder={d.customer} />
-          </Row>
-          <Row>
-            <Field name="label_employeePrimary" label="Primary employee" placeholder={d.employeePrimary} />
-            <Field name="label_employeeSecondary" label="Secondary employee" placeholder={d.employeeSecondary} />
-          </Row>
-        </Section>
-
-        {/* ── Dynamic tier editor (drag-drop / add-remove / rename / bucketing) ── */}
-        <Section title="Tiers — add, rename, reorder, and choose how each is bucketed">
-          <DynamicTierEditor />
+        {/* ── Free-placement org-chart canvas ── */}
+        <Section title="Company structure">
+          <p className="-mt-2 mb-4 text-xs text-zinc-500">
+            Drag boxes anywhere. Drag from a box's bottom handle to another box's top handle to draw a connection
+            (many-to-one supported). Add a box with the toolbar; pick its level (1 = closest to admin).
+          </p>
+          <OrgGraphCanvas />
         </Section>
 
         {/* ── Policy ── */}

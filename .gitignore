@@ -18,7 +18,7 @@ drizzle/.cache/
 _screens/
 
 # local reference images for UI design (not for repo)
-image.png
+image*.png
 
 # netlify
 .netlify/

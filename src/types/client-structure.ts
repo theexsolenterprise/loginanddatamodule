@@ -38,22 +38,49 @@ export type ClientLabels = z.infer<typeof ClientLabelsSchema>;
  *       above. One pool of customers shared by all stores. Path:
  *       `<key>/<instance>/...` (no parent prefix).
  */
-export const TierSchema = z.object({
-  key: z.string().min(1).regex(/^[a-z0-9-]+$/),
-  label: z.string().min(1),
-  roleAs: z.enum(["store", "owner", "employee", "customer"]),
-  cap: z.number().int().nullable().default(null),
-  bucketing: z.enum(["separate", "combined"]).default("separate"),
-  /**
-   * When bucketing === "combined", controls subdivision of the shared pool:
-   *   - 1     → single shared folder, all instances live in one place.
-   *   - N     → up to N separated sub-folders inside the combined pool.
-   *   - null  → unlimited separated sub-folders inside the combined pool.
-   * Ignored when bucketing === "separate".
-   */
-  subBuckets: z.number().int().nullable().default(1),
-});
-export type Tier = z.infer<typeof TierSchema>;
+/**
+ * Tier and Instance are mutually recursive: an Instance can carry its own
+ * `branch: Tier[]` so a single instance overrides the default chain for
+ * whatever lives under it. Each `Tier` likewise has zero-or-more Instances.
+ *
+ * Mutually-recursive Zod schemas need an explicit type annotation + z.lazy
+ * to break the cycle before the runtime values exist.
+ */
+export type Instance = {
+  label?: string;
+  description?: string;
+  branch?: Tier[];
+};
+
+export type Tier = {
+  key: string;
+  label: string;
+  roleAs: "store" | "owner" | "employee" | "customer";
+  cap: number | null;
+  bucketing: "separate" | "combined";
+  subBuckets: number | null;
+  instances?: Instance[];
+};
+
+export const InstanceSchema: z.ZodType<Instance> = z.lazy(() =>
+  z.object({
+    label: z.string().optional(),
+    description: z.string().optional(),
+    branch: z.array(TierSchema).optional(),
+  }),
+) as z.ZodType<Instance>;
+
+export const TierSchema: z.ZodType<Tier> = z.lazy(() =>
+  z.object({
+    key: z.string().min(1).regex(/^[a-z0-9-]+$/),
+    label: z.string().min(1),
+    roleAs: z.enum(["store", "owner", "employee", "customer"]),
+    cap: z.number().int().nullable().default(null),
+    bucketing: z.enum(["separate", "combined"]).default("separate"),
+    subBuckets: z.number().int().nullable().default(1),
+    instances: z.array(InstanceSchema).optional().default([]),
+  }),
+) as z.ZodType<Tier>;
 
 /**
  * ClientStructure — shape of the org tree the tenant can hold.
@@ -68,16 +95,91 @@ export type Tier = z.infer<typeof TierSchema>;
  * - `roles`        — *derived* convenience copy of each tier's `roleAs`.
  *                    Kept so old read paths keep working.
  */
+/**
+ * ChartNode — the new canonical shape.
+ *
+ * A simple recursive tree: every position in the chart is a node. Children
+ * fan out below; siblings under the same parent are parallel chains.
+ * Boxes with `cap: N` represent N instances at that position. `cap: null`
+ * = unlimited.
+ */
+export type ChartNode = {
+  id: string;
+  label: string;
+  description?: string;
+  cap: number | null;
+  bucketing: "separate" | "combined";
+  /** IDs of OTHER nodes anywhere in the tree this node also links to. */
+  linksTo?: string[];
+  children: ChartNode[];
+};
+
+export const ChartNodeSchema: z.ZodType<ChartNode> = z.lazy(() =>
+  z.object({
+    id: z.string(),
+    label: z.string().min(1),
+    description: z.string().optional(),
+    cap: z.number().int().nullable(),
+    bucketing: z.enum(["separate", "combined"]),
+    linksTo: z.array(z.string()).optional(),
+    children: z.array(ChartNodeSchema).default([]),
+  }),
+) as z.ZodType<ChartNode>;
+
+/**
+ * GraphNode — one box on the ReactFlow canvas. `level` is the depth band
+ * (0 = closest to admin, then 1, 2, …). Multiple nodes can sit at the same
+ * level. `x` is the horizontal position within that band; the canvas keeps
+ * vertical spacing uniform so the level lanes stay readable.
+ */
+export type GraphNode = {
+  id: string;
+  label: string;
+  description?: string;
+  level: number;
+  x: number;
+  y: number;
+  cap: number | null;
+  bucketing: "separate" | "combined";
+};
+
+export type GraphEdge = {
+  id: string;
+  source: string;
+  target: string;
+};
+
+export const GraphNodeSchema = z.object({
+  id: z.string(),
+  label: z.string().min(1),
+  description: z.string().optional(),
+  level: z.number().int().min(0),
+  x: z.number(),
+  y: z.number(),
+  cap: z.number().int().nullable(),
+  bucketing: z.enum(["separate", "combined"]),
+});
+
+export const GraphEdgeSchema = z.object({
+  id: z.string(),
+  source: z.string(),
+  target: z.string(),
+});
+
 export const ClientStructureSchema = z.object({
+  /** Canonical free-placement canvas: nodes + edges, supports many-to-one. */
+  graph: z
+    .object({
+      nodes: z.array(GraphNodeSchema).default([]),
+      edges: z.array(GraphEdgeSchema).default([]),
+    })
+    .default({ nodes: [], edges: [] }),
+  /** Legacy tree (still readable for older clients). */
+  boxes: z.array(ChartNodeSchema).default([]),
+  /** Legacy tier list — kept for backward compat. */
   tiers: z
     .array(TierSchema)
-    .min(1)
-    .default([
-      { key: "store", label: "Store", roleAs: "store", cap: null, bucketing: "separate", subBuckets: 1 },
-      { key: "owner", label: "Owner", roleAs: "owner", cap: null, bucketing: "separate", subBuckets: 1 },
-      { key: "employee", label: "Employee", roleAs: "employee", cap: null, bucketing: "separate", subBuckets: 1 },
-      { key: "customer", label: "Customer", roleAs: "customer", cap: null, bucketing: "combined", subBuckets: 1 },
-    ]),
+    .default([]),
   linkPolicy: z.enum(["strict", "flexible"]).default("flexible"),
   employeeTiers: z.boolean().default(true),
   /** Legacy / derived. Don't write — set by mergeStructure() from tiers. */
@@ -86,6 +188,83 @@ export const ClientStructureSchema = z.object({
     .default([]),
 });
 export type ClientStructure = z.infer<typeof ClientStructureSchema>;
+
+/**
+ * Derive legacy `tiers: Tier[]` from a `boxes: ChartNode[]` tree.
+ *
+ * Mapping: walk depth-first. At each depth we look at the *first* root box's
+ * children to determine the next tier's shape (label, cap, bucketing). If
+ * siblings differ across instances, the per-instance branches capture it.
+ * This is the "best-effort linear projection" used by the folder provisioner.
+ */
+export function tiersFromBoxes(boxes: ChartNode[]): Tier[] {
+  if (boxes.length === 0) return [];
+  const out: Tier[] = [];
+
+  // Use the first root as the template; merge in other roots as branches if needed.
+  let cursor: ChartNode | undefined = boxes[0];
+  while (cursor) {
+    out.push(nodeToTier(cursor));
+    cursor = cursor.children[0]; // descend along the leftmost path
+  }
+  return out;
+}
+
+function nodeToTier(node: ChartNode): Tier {
+  return {
+    key: slugify(node.label) || node.id.slice(0, 8),
+    label: node.label,
+    roleAs: "employee", // placeholder — RBAC inference happens upstream
+    cap: node.cap,
+    bucketing: node.bucketing,
+    subBuckets: node.bucketing === "combined" ? null : 1,
+    instances:
+      node.cap != null && node.bucketing === "separate"
+        ? Array.from({ length: node.cap }, () => ({}))
+        : [],
+  };
+}
+
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+}
+
+/**
+ * Project a graph (nodes + edges) into a degenerate legacy `tiers[]` list.
+ * Group nodes by level; pick the first node at each level as the tier
+ * archetype. The folder provisioner uses this for prefix layout — anything
+ * beyond a linear shape is approximated.
+ */
+export function tiersFromGraph(graph: {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}): Tier[] {
+  if (graph.nodes.length === 0) return [];
+  const byLevel = new Map<number, GraphNode[]>();
+  for (const n of graph.nodes) {
+    const arr = byLevel.get(n.level) ?? [];
+    arr.push(n);
+    byLevel.set(n.level, arr);
+  }
+  const levels = Array.from(byLevel.keys()).sort((a, b) => a - b);
+  return levels.map((lvl) => {
+    const nodes = byLevel.get(lvl)!;
+    const head = nodes[0];
+    const sameLabel = nodes.every((n) => n.label === head.label);
+    return {
+      key: slugify(head.label) || `level-${lvl}`,
+      label: sameLabel ? head.label : `Level ${lvl + 1}`,
+      roleAs: "employee" as const,
+      cap: head.cap,
+      bucketing: head.bucketing,
+      subBuckets: head.bucketing === "combined" ? null : 1,
+      instances: nodes.map((n) => ({
+        label: n.label,
+        description: n.description,
+      })),
+    };
+  });
+}
 
 export function defaultLabels(): ClientLabels {
   return ClientLabelsSchema.parse({});

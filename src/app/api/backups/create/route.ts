@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "../../../../../auth";
 import { createBackup, type BackupScope } from "@/lib/backup";
 import { canBackupScope } from "@/lib/backup-rbac";
+import { logAudit } from "@/lib/audit";
 
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -18,6 +19,13 @@ export async function POST(req: NextRequest) {
   );
   if (!allowed) return new Response("Forbidden", { status: 403 });
   const result = await createBackup({ scope, type: "manual", label });
+  await logAudit({
+    actorUserId: session.user.id,
+    clientId: scope.kind !== "system" ? scope.clientId : null,
+    action: "backup.create",
+    target: result.key,
+    metadata: { scope, bytes: result.bytes, label },
+  });
   // Bounce back to the page that opened us.
   const referer = req.headers.get("referer") ?? "/admin/settings";
   const url = new URL(referer);

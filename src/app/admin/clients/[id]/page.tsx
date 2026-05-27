@@ -5,6 +5,7 @@ import { clients, users, nodes } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import type { ClientLabels, ClientStructure } from "@/types/client-structure";
 import { requireAdmin } from "../../../../../auth";
+import { logAudit } from "@/lib/audit";
 
 export default async function ClientDetailPage(props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
@@ -18,21 +19,33 @@ export default async function ClientDetailPage(props: { params: Promise<{ id: st
 
   async function deleteClient() {
     "use server";
-    await requireAdmin();
+    const session = await requireAdmin();
     await db.delete(clients).where(eq(clients.id, id));
+    await logAudit({
+      actorUserId: session.user.id, clientId: id,
+      action: "client.delete", target: c.slug,
+    });
     redirect("/admin/clients");
   }
 
   async function suspendClient() {
     "use server";
-    await requireAdmin();
+    const session = await requireAdmin();
     await db.update(clients).set({ status: "suspended" }).where(eq(clients.id, id));
+    await logAudit({
+      actorUserId: session.user.id, clientId: id,
+      action: "client.suspend", target: c.slug,
+    });
   }
 
   async function activateClient() {
     "use server";
-    await requireAdmin();
+    const session = await requireAdmin();
     await db.update(clients).set({ status: "active" }).where(eq(clients.id, id));
+    await logAudit({
+      actorUserId: session.user.id, clientId: id,
+      action: "client.activate", target: c.slug,
+    });
   }
 
   return (
