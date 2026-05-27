@@ -28,3 +28,4 @@ image.png
 .idea/
 .vscode/
 *.log
+tsconfig.tsbuildinfo
