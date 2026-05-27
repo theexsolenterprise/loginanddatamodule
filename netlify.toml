@@ -1,0 +1,16 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Netlify Blobs is auto-bound for the site at runtime; no extra config needed
+# beyond the @netlify/blobs SDK + NETLIFY_BLOBS_CONTEXT (provided by Netlify).
+
+[functions]
+  # Default 10s is too tight for backup zip generation across many clients.
+  node_bundler = "esbuild"
+
+[functions."backup"]
+  timeout = 60

@@ -1,0 +1,30 @@
+node_modules/
+.next/
+out/
+dist/
+
+# env
+.env
+.env.local
+.env.*.local
+
+# drizzle artifacts kept in repo, but local migration runs aren't
+drizzle/.cache/
+
+# local netlify blobs fallback (only used when NETLIFY_* env vars are unset)
+.blobs/
+
+# local browser-driver screenshots (not for repo)
+_screens/
+
+# local reference images for UI design (not for repo)
+image.png
+
+# netlify
+.netlify/
+
+# os/editor
+.DS_Store
+.idea/
+.vscode/
+*.log
