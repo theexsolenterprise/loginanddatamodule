@@ -4,6 +4,7 @@ import { db } from "@/db/client";
 import { clients, users, nodes } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import type { ClientLabels, ClientStructure } from "@/types/client-structure";
+import { requireAdmin } from "../../../../../auth";
 
 export default async function ClientDetailPage(props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
@@ -17,17 +18,20 @@ export default async function ClientDetailPage(props: { params: Promise<{ id: st
 
   async function deleteClient() {
     "use server";
+    await requireAdmin();
     await db.delete(clients).where(eq(clients.id, id));
     redirect("/admin/clients");
   }
 
   async function suspendClient() {
     "use server";
+    await requireAdmin();
     await db.update(clients).set({ status: "suspended" }).where(eq(clients.id, id));
   }
 
   async function activateClient() {
     "use server";
+    await requireAdmin();
     await db.update(clients).set({ status: "active" }).where(eq(clients.id, id));
   }
 

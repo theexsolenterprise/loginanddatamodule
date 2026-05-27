@@ -15,6 +15,7 @@ import {
 import { DynamicTierEditorHydrated } from "@/components/DynamicTierEditorHydrated";
 import { ensurePrefix, getClientStore, storeNameForClient } from "@/lib/blobs";
 import { defaultFolderPlan } from "@/lib/structure";
+import { requireAdmin } from "../../../../../../auth";
 
 export default async function EditClientPage(props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
@@ -26,6 +27,7 @@ export default async function EditClientPage(props: { params: Promise<{ id: stri
 
   async function save(formData: FormData) {
     "use server";
+    await requireAdmin();
     const name = String(formData.get("name") ?? c.name).trim();
     const kind = String(formData.get("kind") ?? c.kind);
 

@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "../../../../../auth";
-import { restoreBackup, type RestoreMode } from "@/lib/backup";
+import { restoreBackup, scopeFromKey, type RestoreMode } from "@/lib/backup";
+import { canBackupScope } from "@/lib/backup-rbac";
 
 /**
  * Final restore endpoint — only reachable after the user picked merge or
- * replace on /settings/restore. We re-check the backup's scope vs the
- * actor's permissions by parsing the key.
+ * replace on /settings/restore.
+ *
+ * Security:
+ *   - Trusted scope is derived from the key path (not the manifest, which
+ *     a user-uploaded zip could forge).
+ *   - canBackupScope() enforces the same rules as create/upload.
+ *   - restoreBackup() additionally refuses to act on any client/node outside
+ *     the trusted scope (defence in depth).
  */
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -19,14 +26,20 @@ export async function POST(req: NextRequest) {
   }
   if (!key) return new Response("key missing", { status: 400 });
 
-  // Admin can restore anything. Non-admins can only restore subtree keys
-  // whose first segment is `clients/<their clientId>/subtree/...`.
-  if (session.user.role !== "admin") {
-    const expectedPrefix = `clients/${session.user.clientId}/subtree/`;
-    if (!key.startsWith(expectedPrefix)) {
-      return new Response("Forbidden", { status: 403 });
-    }
+  let scope;
+  try {
+    scope = scopeFromKey(key);
+  } catch {
+    return new Response("Invalid backup key", { status: 400 });
   }
+  const allowed = await canBackupScope(
+    {
+      id: session.user.id, role: session.user.role,
+      clientId: session.user.clientId, isPrimary: session.user.isPrimary,
+    },
+    scope,
+  );
+  if (!allowed) return new Response("Forbidden", { status: 403 });
 
   const result = await restoreBackup(key, mode);
   const root = session.user.role === "admin" ? "/admin" : "/app";

@@ -287,6 +287,24 @@ export async function deleteBackup(key: string) {
  */
 export type RestoreMode = "replace" | "merge";
 
+/**
+ * Derive the trusted scope from a backup storage key. The key was written
+ * by the system (during create/upload) under the caller's verified scope,
+ * so it is the source of truth — NOT the manifest inside the zip (which a
+ * malicious uploader could forge).
+ */
+export function scopeFromKey(key: string): BackupScope {
+  const parts = key.split("/");
+  if (parts[0] === "system") return { kind: "system" };
+  if (parts[0] === "clients" && parts[2] === "subtree" && parts.length >= 6) {
+    return { kind: "subtree", clientId: parts[1], nodeId: parts[3] };
+  }
+  if (parts[0] === "clients" && parts.length >= 4) {
+    return { kind: "client", clientId: parts[1] };
+  }
+  throw new Error(`Unparseable backup key: ${key}`);
+}
+
 export async function restoreBackup(
   key: string,
   mode: RestoreMode = "replace",
@@ -296,6 +314,11 @@ export async function restoreBackup(
   nodesTouched: number;
   mode: RestoreMode;
 }> {
+  // SECURITY: the trustworthy scope is the one encoded in the key path.
+  // We will REFUSE to act on any client_id in the manifest that does not
+  // match this scope, and (for subtree) any node not in the descendant set.
+  const trustedScope = scopeFromKey(key);
+
   const data = await backupStore().get(key, { type: "arrayBuffer" });
   if (!data) throw new Error(`Backup not found: ${key}`);
 
@@ -316,9 +339,25 @@ export async function restoreBackup(
   let usersTouched = 0;
   let nodesTouched = 0;
 
-  const subtree = manifest.scope?.kind === "subtree";
+  const subtree = trustedScope.kind === "subtree";
+
+  // Build an allow-list of client IDs from the trusted scope. Anything in
+  // the manifest outside this list is silently skipped — defends against a
+  // tampered zip with extra clients.
+  const allowedClientIds = new Set<string>(
+    trustedScope.kind === "system"
+      ? (manifest.clients as Array<{ id: string }>).map((c) => c.id) // any
+      : [trustedScope.kind === "client" ? trustedScope.clientId : trustedScope.clientId],
+  );
+  // For subtree scope, also pre-compute the allowed node id set.
+  const allowedNodeIds = trustedScope.kind === "subtree"
+    ? new Set(await descendantNodeIds(trustedScope.nodeId))
+    : null;
 
   for (const c of manifest.clients as Array<{ id: string }>) {
+    if (trustedScope.kind !== "system" && !allowedClientIds.has(c.id)) {
+      continue; // refuse to touch out-of-scope clients
+    }
     const base = `clients/${c.id}`;
     const us = JSON.parse((await fileByPath[`${base}/users.json`].buffer()).toString("utf8"));
     const ns = JSON.parse((await fileByPath[`${base}/nodes.json`].buffer()).toString("utf8"));
@@ -362,12 +401,17 @@ export async function restoreBackup(
       }
     }
 
-    if (ns.length > 0) {
+    // Filter nodes by trustedScope: subtree restores only touch descendants.
+    const scopedNodes = (ns as any[]).filter((n) => {
+      if (n.clientId !== c.id) return false;
+      if (allowedNodeIds && !allowedNodeIds.has(n.id)) return false;
+      return true;
+    });
+    if (scopedNodes.length > 0) {
       if (mode === "replace") {
-        await db.insert(nodes).values(ns);
+        await db.insert(nodes).values(scopedNodes);
       } else {
-        // merge: upsert each node by primary key
-        for (const n of ns as any[]) {
+        for (const n of scopedNodes) {
           await db
             .insert(nodes)
             .values(n)
@@ -382,20 +426,36 @@ export async function restoreBackup(
         }
       }
     }
-    nodesTouched += ns.length;
+    nodesTouched += scopedNodes.length;
 
-    for (const u of us) {
+    // Filter users: must belong to scoped client; for subtree, must link to
+    // an allowed node.
+    const scopedUsers = (us as any[]).filter((u) => {
+      if (u.clientId !== c.id) return false;
+      if (allowedNodeIds) {
+        return scopedNodes.some((n) => n.userId === u.id);
+      }
+      return true;
+    });
+    for (const u of scopedUsers) {
+      // For non-system restores, never let restore mutate role/clientId
+      // (privilege escalation surface). Admin-scope restores can set anything.
+      const setClause: Record<string, unknown> =
+        trustedScope.kind === "system"
+          ? {
+              email: u.email, firstName: u.firstName, lastName: u.lastName,
+              role: u.role, isPrimary: u.isPrimary, passwordHash: u.passwordHash,
+              disabledAt: u.disabledAt, updatedAt: new Date(),
+            }
+          : {
+              email: u.email, firstName: u.firstName, lastName: u.lastName,
+              passwordHash: u.passwordHash, disabledAt: u.disabledAt,
+              updatedAt: new Date(),
+            };
       await db
         .insert(users)
         .values(u)
-        .onConflictDoUpdate({
-          target: users.id,
-          set: {
-            email: u.email, firstName: u.firstName, lastName: u.lastName,
-            role: u.role, isPrimary: u.isPrimary, passwordHash: u.passwordHash,
-            disabledAt: u.disabledAt, updatedAt: new Date(),
-          },
-        });
+        .onConflictDoUpdate({ target: users.id, set: setClause });
       usersTouched++;
     }
 

@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import { revalidatePath } from "next/cache";
 import type { ClientStructure } from "@/types/client-structure";
 import { DataBackupCard } from "@/components/DataBackupCard";
+import { requireAdmin } from "../../auth";
 
 interface ClientCardProps {
   client: Client;
@@ -109,11 +110,23 @@ async function LoginPanel({
   users: any[];
   googleSet: Set<string>;
 }) {
+  // Admin guard: any user that's a member of this client is by definition
+  // manageable by an admin. For non-admin roles managing subordinates, use
+  // TeamSection — it does same-client + canManage checks.
+  async function assertAdminAndSameClient(targetUserId: string) {
+    await requireAdmin();
+    const [target] = await db.select().from(users).where(eq(users.id, targetUserId)).limit(1);
+    if (!target) throw new Response("Not found", { status: 404 });
+    if (target.clientId !== client.id) throw new Response("Forbidden", { status: 403 });
+    return target;
+  }
+
   async function updateEmail(formData: FormData) {
     "use server";
     const id = String(formData.get("id"));
+    await assertAdminAndSameClient(id);
     const email = String(formData.get("email") ?? "").trim().toLowerCase();
-    if (!id || !email) return;
+    if (!email) return;
     await db.update(users).set({ email, updatedAt: new Date() }).where(eq(users.id, id));
     revalidatePath("/admin/settings/login");
   }
@@ -121,6 +134,7 @@ async function LoginPanel({
   async function resetPassword(formData: FormData) {
     "use server";
     const id = String(formData.get("id"));
+    await assertAdminAndSameClient(id);
     const password = String(formData.get("password") ?? "");
     if (password.length < 8) throw new Error("Password must be 8+ characters.");
     const passwordHash = await bcrypt.hash(password, 12);
@@ -129,12 +143,16 @@ async function LoginPanel({
 
   async function inviteUser(formData: FormData) {
     "use server";
+    await requireAdmin();
     const email = String(formData.get("email") ?? "").trim().toLowerCase();
     const firstName = String(formData.get("firstName") ?? "").trim();
     const lastName = String(formData.get("lastName") ?? "").trim();
     const role = String(formData.get("role") ?? "");
     const password = String(formData.get("password") ?? "");
     const isPrimary = formData.get("isPrimary") === "on";
+    if (!["store", "owner", "employee", "customer"].includes(role)) {
+      throw new Error("Invalid role.");
+    }
     if (!email || !firstName || !lastName || password.length < 8) {
       throw new Error("Fill all fields; password must be 8+ chars.");
     }
@@ -150,6 +168,7 @@ async function LoginPanel({
   async function unlinkGoogle(formData: FormData) {
     "use server";
     const id = String(formData.get("id"));
+    await assertAdminAndSameClient(id);
     await db.delete(accounts).where(and(eq(accounts.userId, id), eq(accounts.provider, "google")));
     revalidatePath("/admin/settings/login");
   }
@@ -157,6 +176,7 @@ async function LoginPanel({
   async function deleteUser(formData: FormData) {
     "use server";
     const id = String(formData.get("id"));
+    await assertAdminAndSameClient(id);
     await db.delete(users).where(eq(users.id, id));
     revalidatePath("/admin/settings/login");
   }
@@ -164,6 +184,7 @@ async function LoginPanel({
   async function setDisabled(formData: FormData) {
     "use server";
     const id = String(formData.get("id"));
+    await assertAdminAndSameClient(id);
     const disable = formData.get("disable") === "true";
     await db.update(users).set({
       disabledAt: disable ? new Date() : null, updatedAt: new Date(),

@@ -12,6 +12,7 @@ import { storeNameForClient } from "@/lib/blobs";
 import { DynamicTierEditor } from "@/components/DynamicTierEditor";
 import { TierSchema } from "@/types/client-structure";
 import { z } from "zod";
+import { requireAdmin } from "../../../../../auth";
 
 // Free-text suggestions for the Kind field. The user can type anything.
 const KIND_SUGGESTIONS = [
@@ -29,6 +30,7 @@ const KIND_SUGGESTIONS = [
 export default function NewClientPage() {
   async function create(formData: FormData) {
     "use server";
+    await requireAdmin();
     const name = String(formData.get("name") ?? "").trim();
     const slugVal = slug(String(formData.get("slug") ?? name));
     const kind = String(formData.get("kind") ?? "custom");
