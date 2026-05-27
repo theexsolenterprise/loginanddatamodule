@@ -189,42 +189,6 @@ export const ClientStructureSchema = z.object({
 });
 export type ClientStructure = z.infer<typeof ClientStructureSchema>;
 
-/**
- * Derive legacy `tiers: Tier[]` from a `boxes: ChartNode[]` tree.
- *
- * Mapping: walk depth-first. At each depth we look at the *first* root box's
- * children to determine the next tier's shape (label, cap, bucketing). If
- * siblings differ across instances, the per-instance branches capture it.
- * This is the "best-effort linear projection" used by the folder provisioner.
- */
-export function tiersFromBoxes(boxes: ChartNode[]): Tier[] {
-  if (boxes.length === 0) return [];
-  const out: Tier[] = [];
-
-  // Use the first root as the template; merge in other roots as branches if needed.
-  let cursor: ChartNode | undefined = boxes[0];
-  while (cursor) {
-    out.push(nodeToTier(cursor));
-    cursor = cursor.children[0]; // descend along the leftmost path
-  }
-  return out;
-}
-
-function nodeToTier(node: ChartNode): Tier {
-  return {
-    key: slugify(node.label) || node.id.slice(0, 8),
-    label: node.label,
-    roleAs: "employee", // placeholder — RBAC inference happens upstream
-    cap: node.cap,
-    bucketing: node.bucketing,
-    subBuckets: node.bucketing === "combined" ? null : 1,
-    instances:
-      node.cap != null && node.bucketing === "separate"
-        ? Array.from({ length: node.cap }, () => ({}))
-        : [],
-  };
-}
-
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
 }
