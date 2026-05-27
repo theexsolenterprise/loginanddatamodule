@@ -48,14 +48,30 @@ type NodeData = {
 function BoxNode({ data }: NodeProps<Node<NodeData>>) {
   const p = paletteFor(data.level);
   const unlimited = data.cap == null;
+  const stack = !unlimited && (data.cap ?? 1) > 1 ? Math.min(data.cap!, 4) : 1;
   return (
+    <div className="relative">
+      {/* Stack shadow layers — visual cue that this box represents N positions */}
+      {stack > 1 && Array.from({ length: stack - 1 }, (_, i) => (
+        <div
+          key={i}
+          aria-hidden
+          className={"absolute rounded-lg border bg-white ring-1 " + p.ring}
+          style={{
+            inset: 0,
+            transform: `translate(${(i + 1) * 4}px, ${(i + 1) * 4}px)`,
+            opacity: 0.55 - i * 0.12,
+            zIndex: -i - 1,
+          }}
+        />
+      ))}
     <div
       className={
-        "relative min-w-[200px] max-w-[260px] rounded-lg border bg-white p-3 shadow-md ring-1 " + p.ring
+        "relative box-border w-[240px] overflow-hidden rounded-lg border bg-white p-3 shadow-md ring-1 " + p.ring
       }
     >
       <Handle type="target" position={Position.Top} className="!h-2 !w-2 !bg-zinc-400" />
-      <div className="flex items-start gap-2">
+      <div className="flex min-w-0 items-start gap-2">
         <span className={"flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold " + p.chip}>
           {data.level + 1}
         </span>
@@ -64,13 +80,13 @@ function BoxNode({ data }: NodeProps<Node<NodeData>>) {
           value={data.label}
           onChange={(e) => data.onChange({ label: e.target.value })}
           placeholder="Label"
-          className="nodrag flex-1 rounded border border-zinc-300 px-2 py-1 text-sm font-semibold"
+          className="nodrag min-w-0 flex-1 rounded border border-zinc-300 px-2 py-1 text-sm font-semibold"
         />
         <button
           type="button"
           onClick={data.onRemove}
           title="Remove"
-          className="nodrag rounded border border-red-200 bg-red-50 px-1 py-0.5 text-[10px] text-red-700 hover:bg-red-100"
+          className="nodrag shrink-0 rounded border border-red-200 bg-red-50 px-1 py-0.5 text-[10px] text-red-700 hover:bg-red-100"
         >
           ✕
         </button>
@@ -80,9 +96,9 @@ function BoxNode({ data }: NodeProps<Node<NodeData>>) {
         value={data.description ?? ""}
         onChange={(e) => data.onChange({ description: e.target.value })}
         placeholder="Description (optional)"
-        className="nodrag mt-2 w-full rounded border border-zinc-300 px-2 py-1 text-xs"
+        className="nodrag mt-2 box-border w-full rounded border border-zinc-300 px-2 py-1 text-xs"
       />
-      <div className="nodrag mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-700">
+      <div className="nodrag mt-2 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-zinc-700">
         <label className="inline-flex items-center gap-1">
           <input
             type="checkbox"
@@ -97,20 +113,21 @@ function BoxNode({ data }: NodeProps<Node<NodeData>>) {
             min={1}
             value={data.cap ?? 1}
             onChange={(e) => data.onChange({ cap: Math.max(1, Number(e.target.value) || 1) })}
-            className="w-14 rounded border border-zinc-300 px-1.5 py-0.5"
+            className="w-12 shrink-0 rounded border border-zinc-300 px-1.5 py-0.5"
           />
         )}
         <select
           value={data.bucketing}
           onChange={(e) => data.onChange({ bucketing: e.target.value as NodeData["bucketing"] })}
-          className="rounded border border-zinc-300 px-1.5 py-0.5"
+          className="shrink-0 rounded border border-zinc-300 px-1.5 py-0.5"
         >
           <option value="separate">separate</option>
           <option value="combined">combined</option>
         </select>
-        <span className="ml-auto text-[10px] text-zinc-400">level {data.level + 1}</span>
+        <span className="ml-auto shrink-0 text-[10px] text-zinc-400">L{data.level + 1}</span>
       </div>
       <Handle type="source" position={Position.Bottom} className="!h-2 !w-2 !bg-zinc-400" />
+    </div>
     </div>
   );
 }
